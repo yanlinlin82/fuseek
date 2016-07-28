@@ -541,7 +541,7 @@ sub do_identify
 
 	sub try_split_and_align
 	{
-		my ($genome, $chrom, $pos, $strand, $breakpoint, $seq, $chrom2, $pos2, $strand2, $seq2, $id, $opt, $breakpoints_ref) = @_;
+		my ($genome, $chrom, $pos, $strand, $breakpoint, $seq, $cigar, $chrom2, $pos2, $strand2, $seq2, $id, $opt, $breakpoints_ref) = @_;
 
 		my $o = check_overlap($seq, $strand, $seq2, $strand2, $opt);
 		if (defined $o) {
@@ -550,9 +550,17 @@ sub do_identify
 
 		my $query;
 		if ($strand eq '+') {
-			$query = substr($seq, $breakpoint - $pos);
+			my $query_clipped = 0;
+			if ($cigar =~ /([0-9]+)S$/) {
+				$query_clipped += $1;
+			}
+			$query = substr($seq, length($seq) - $query_clipped);
 		} else {
-			$query = rev_comp_seq(substr($seq, 0, $breakpoint - $pos));
+			my $query_clipped = 0;
+			if ($cigar =~ /^([0-9]+)S/) {
+				$query_clipped += $1;
+			}
+			$query = rev_comp_seq(substr($seq, 0, $query_clipped));
 		}
 
 		my $target;
@@ -590,10 +598,10 @@ sub do_identify
 				$id, $seq, $seq2, $qual, $qual2) = split("\t", $line);
 
 			if ($breakpoint ne '-' and exists $candidate_breakpoints_ref->{$chrom}->{$breakpoint}->{$strand}) {
-				try_split_and_align $genome, $chrom, $pos, $strand, $breakpoint, $seq, $chrom2, $pos2, $strand2, $seq2, $id, $opt, $breakpoints_ref;
+				try_split_and_align $genome, $chrom, $pos, $strand, $breakpoint, $seq, $cigar, $chrom2, $pos2, $strand2, $seq2, $id, $opt, $breakpoints_ref;
 			}
 			if ($breakpoint2 ne '-' and exists $candidate_breakpoints_ref->{$chrom2}->{$breakpoint2}->{$strand2}) {
-				try_split_and_align $genome, $chrom2, $pos2, $strand2, $breakpoint2, $seq2, $chrom, $pos, $strand, $seq, $id, $opt, $breakpoints_ref;
+				try_split_and_align $genome, $chrom2, $pos2, $strand2, $breakpoint2, $seq2, $cigar2, $chrom, $pos, $strand, $seq, $id, $opt, $breakpoints_ref;
 			}
 		}
 		close $file;
