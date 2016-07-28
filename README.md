@@ -15,3 +15,16 @@
 3. 'refine' - 在断点附近重新做比对，优化结果，同时也确定各融合突变的频率。
 
 4. 'annotate' - 对融合突变进行注释，确定其基因及其外显子等信息。
+
+## 安装说明
+
+本程序对第三方程序的依赖性极少，一般而言只要安装了perl即可运行。
+
+如果有在运行本程序时，出现如下错误提示：
+
+	Can't locate List/BinarySearch.pm in @INC (you may need to install the List::BinarySearch module) (@INC contains: ... )
+
+则可使用cpan安装相应的perl模块：
+
+	$ cpan
+	cpan> install List::BinarySearch
