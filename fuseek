@@ -22,12 +22,12 @@ sub err
 
 sub ensure_directory
 {
-	my @a = split('/', shift);
-	for my $i (0 .. $#a) {
-		my $d = join("/", @a[0 .. $i]);
-		if (not -d $d) {
-			print STDERR "Create directory '$d'\n";
-			mkdir $d or die;
+	my @dir_names = split('/', shift);
+	for my $i (0 .. $#dir_names) {
+		my $path = join("/", @dir_names[0 .. $i]);
+		if (not -d $path) {
+			print STDERR "Create directory '$path'\n";
+			mkdir $path or die;
 		}
 	}
 }
