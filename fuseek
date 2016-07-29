@@ -533,6 +533,7 @@ sub try_split_and_align
 
 	my $query;
 	if ($strand eq '+') {
+		return if ($breakpoint - $pos >= length($seq));  # soft-clip may be all adaptor
 		$query = substr($seq, $breakpoint - $pos);
 	} else {
 		my $query_clipped = 0;
@@ -658,8 +659,8 @@ sub do_identify
 
 		# TODO: Should I filter at here?
 		#print "[candidate]   $chrom\t$pos\t$strand\t" . scalar(keys(%{$supports})) . "\t$gene\t$transcript\n";
-		#next if scalar keys %{$supports} < 2;
-		#next if $opt->{ref_gene} ne '' and $gene eq '-';
+		next if scalar keys %{$supports} < 2;
+		next if $opt->{ref_gene} ne '' and $gene eq '-';
 
 		$candidate_breakpoints{$chrom}->{$pos}->{$strand} = { supports => scalar keys %{$supports}, gene => $gene, transcript => $transcript };
 	}
