@@ -764,11 +764,13 @@ sub do_run
 
 #==========================================================#
 
+my $version = "0.0.1";
+
 sub print_usage
 {
 	print "
 Program: fuseek (FUsion SEEKer)
-Version: 0.0.1
+Version: $version
 
 Usage:   fuseek <command> [options]
 
@@ -792,7 +794,8 @@ my %proc = (
 	identify => \&do_identify,
 	refine   => \&do_refine,
 	annotate => \&do_annotate,
-	run      => \&do_run
+	run      => \&do_run,
+	version  => sub { print $version, "\n"; }
 );
 
 my $cmd = shift;
