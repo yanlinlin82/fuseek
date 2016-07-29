@@ -119,7 +119,7 @@ sub rev_comp_seq
 {
 	my $seq = shift;
 	$seq =~ tr/ACGTacgt/TGCAtgca/;
-	return reverse $seq;
+	return scalar reverse $seq;
 }
 
 sub load_genome
@@ -281,7 +281,8 @@ my $def_opt_identify = {
 	min_clip     => 10,
 
 	seed_size         => 8,
-	max_fragment_size => 500,
+	max_fragment_size => 1000,
+	rev_expand_size   => 100,
 	max_indel_size    => 3,
 	match_for_indel   => 5
 };
@@ -498,6 +499,11 @@ sub check_overlap
 	for (my $len = $seq_len; $len >= 10; --$len) {
 		my $x = align(substr($seq, 0, $len), substr($rseq2, $seq_len - $len, $len), $opt);
 		if (defined $x) {
+			if ($opt->{verbose} > 1) {
+				print STDERR "Found overlap between PE reads: ($len bp, x = $x)\n";
+				print STDERR '   ', (' ' x (length($seq) - $len)), "5'-", $seq, "-3'\n";
+				print STDERR '   ', "3'-", scalar reverse($seq2), "-5'\n";
+			}
 			return $len;
 		}
 	}
@@ -518,54 +524,69 @@ sub add_breakpoint
 
 sub try_split_and_align
 {
-	my ($genome, $chrom, $pos, $strand, $breakpoint, $seq, $cigar, $chrom2, $pos2, $strand2, $seq2, $id, $opt, $breakpoints_ref) = @_;
-print "=============== try_split_and_align\n";
+	my ($genome, $chrom, $pos, $strand, $breakpoint, $seq, $cigar, $chrom2, $pos2, $strand2, $seq2, $cigar2, $id, $opt, $breakpoints_ref) = @_;
+
+	print STDERR "=============== try_split_and_align ($chrom:$pos:$strand, $cigar, $breakpoint, $chrom2:$pos2:$strand2)\n" if $opt->{verbose} > 1;
 
 	my $o = check_overlap($seq, $strand, $seq2, $strand2, $opt);
-	if (defined $o) {
-		$seq = substr($seq, 0, $o);
-	}
-print "check_overlap: $o\n";
+	$seq = substr($seq, 0, $o) if defined $o;
 
 	my $query;
 	if ($strand eq '+') {
-		my $query_clipped = 0;
-		if ($cigar =~ /([0-9]+)S$/) {
-			$query_clipped += $1;
-		}
-		$query = substr($seq, length($seq) - $query_clipped);
+		$query = substr($seq, $breakpoint - $pos);
 	} else {
 		my $query_clipped = 0;
 		if ($cigar =~ /^([0-9]+)S/) {
-			$query_clipped += $1;
+			$query_clipped = $1;
 		}
 		$query = rev_comp_seq(substr($seq, 0, $query_clipped));
 	}
 
-	my $target;
+	my $target_start;
+	my $target_end;
 	if ($strand2 eq '+') {
-		$target = substr($genome->{$chrom2}, $pos2, $opt->{max_fragment_size});
+		$target_start = $pos2 - $opt->{rev_expand_size};
+		$target_end = $target_start + $opt->{max_fragment_size} + $opt->{rev_expand_size};
 	} else {
-		$target = substr($genome->{$chrom2}, $pos2 + length($seq2) - $opt->{max_fragment_size}, $opt->{max_fragment_size});
+		$target_end = $pos2;
+		while ($cigar2 =~ /([0-9]+)[MD]/g) {
+			$target_end += $1;
+		}
+		$target_end += $opt->{rev_expand_size};
+		$target_start = $target_end - $opt->{max_fragment_size} - $opt->{rev_expand_size};
 	}
+	if ($target_start < 1) {
+		$target_start = 1;
+	}
+	if ($target_end > length($genome->{$chrom2})) {
+		$target_end = length($genome->{$chrom2});
+	}
+	my $target = substr($genome->{$chrom2}, $target_start - 1, $target_end - $target_start);
+	my $target_strand = '+';
 	if ($strand eq $strand2) {
 		$target = rev_comp_seq($target);
+		$target_strand = '-';
 	}
-print "target: '$target'\n";
-print " query: '$query'\n";
+
+	if ($opt->{verbose} > 1) {
+		print STDERR "----------------------\n";
+		print STDERR "target: '$target'\n";
+		print STDERR "query : '$query'\n";
+	}
 
 	my $x = align($target, $query, $opt);
 	if (defined $x) {
-print "   align at: $x\n";
 		my $breakpoint2;
-		if ($strand2 eq '+') {
-			$breakpoint2 = $pos2 + $x;
+		if ($target_strand eq '+') {
+			$breakpoint2 = $target_start + $x;
 		} else {
-			$breakpoint2 = $pos2 - $x;
+			$breakpoint2 = $target_end - $x;
 		}
 		add_breakpoint $breakpoints_ref, $chrom, $breakpoint, $strand, $chrom2, $breakpoint2, $strand2, $id;
+
+		print STDERR "align at: $x ($chrom2:$breakpoint2:$strand2, target_strand = '$target_strand')\n" if $opt->{verbose} > 1;
 	} else {
-print "   align failed\n";
+		print STDERR "align failed\n" if $opt->{verbose} > 1;
 	}
 }
 
@@ -581,7 +602,7 @@ sub load_discordant_reads
 sub process_paired_reads
 {
 	my ($discordant_reads, $opt, $breakpoints_ref, $candidate_breakpoints_ref, $genome, $min_clip) = @_;
-print "process_paired_reads: ", Dumper $discordant_reads;
+	#print "process_paired_reads: ", Dumper $discordant_reads;
 
 	for my $p (@{$discordant_reads}) {
 		my $breakpoint = infer_breakpoint { strand => $p->{strand}, cigar => $p->{cigar}, pos => $p->{pos} }, $min_clip;
@@ -589,11 +610,11 @@ print "process_paired_reads: ", Dumper $discordant_reads;
 
 		if ($breakpoint ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom}}->{$breakpoint}->{$p->{strand}}) {
 			try_split_and_align $genome, $p->{chrom}, $p->{pos}, $p->{strand}, $breakpoint,
-				$p->{seq}, $p->{cigar}, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{seq2}, $p->{id}, $opt, $breakpoints_ref;
+				$p->{seq}, $p->{cigar}, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{seq2}, $p->{cigar2}, $p->{id}, $opt, $breakpoints_ref;
 		}
 		if ($breakpoint2 ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom2}}->{$breakpoint2}->{$p->{strand2}}) {
 			try_split_and_align $genome, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $breakpoint2,
-				$p->{seq2}, $p->{cigar2}, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{seq}, $p->{id}, $opt, $breakpoints_ref;
+				$p->{seq2}, $p->{cigar2}, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{seq}, $p->{cigar}, $p->{id}, $opt, $breakpoints_ref;
 		}
 	}
 }
@@ -635,13 +656,14 @@ sub do_identify
 			}
 		}
 
-		print "[candidate]   $chrom\t$pos\t$strand\t" . scalar(keys(%{$supports})) . "\t$gene\t$transcript\n";
+		# TODO: Should I filter at here?
+		#print "[candidate]   $chrom\t$pos\t$strand\t" . scalar(keys(%{$supports})) . "\t$gene\t$transcript\n";
 		#next if scalar keys %{$supports} < 2;
 		#next if $opt->{ref_gene} ne '' and $gene eq '-';
 
 		$candidate_breakpoints{$chrom}->{$pos}->{$strand} = { supports => scalar keys %{$supports}, gene => $gene, transcript => $transcript };
 	}
-	print "Candidate breakpioints: ", scalar keys %{candidate_breakpoints}, "\n";
+	#print "Candidate breakpioints: ", scalar keys %{candidate_breakpoints}, "\n";
 
 	my $genome = load_genome $opt->{genome_fasta}, $opt->{verbose};
 	my %breakpoints = ();
