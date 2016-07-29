@@ -84,6 +84,37 @@ sub compare_pos_and_range
 	return $res;
 }
 
+sub load_tsv
+{
+	my ($filename, $col_names) = @_;
+
+	my $is_gz = $filename =~ /\.gz$/;
+	my $mode = $is_gz ? '-|' : '<';
+	my $name = ($is_gz ? 'zcat ' : '') . $filename;
+
+	open my $file, $mode, $name or die "Failed to read '$filename'";
+	my @data = ();
+	my $line_no = 0;
+	while (my $line = <$file>) {
+		++$line_no;
+		chomp $line;
+		if ($line_no == 1) {
+			die "Unexpected column names:\n"
+				. "  Exp.: " . join("\t", @{$col_names}) . "\n"
+				. "  Obs.: " . $line . "\n"
+				. " in '$filename'"
+				if $line ne join("\t", @{$col_names});
+		} else {
+			my @values = split("\t", $line);
+			die "Unmatched column count in line $line_no of '$filename'" if scalar @values != scalar @{$col_names};
+			push @data, { map { $col_names->[$_] => $values[$_] } 0 .. $#values };
+		}
+	}
+	close $file;
+
+	return { names => $col_names, data => \@data };
+}
+
 sub rev_comp_seq
 {
 	my $seq = shift;
@@ -93,26 +124,29 @@ sub rev_comp_seq
 
 sub load_genome
 {
-	my $filename = shift;
+	my ($filename, $verbose) = @_;
 
-	my %genome = ();
-
-	print STDERR "Loading genome:";
+	print STDERR "Loading genome:" if $verbose > 1;
 	open my $file, "<", $filename or die "Failed to read '$filename'";
+	my %genome = ();
 	my $name;
+	my $chromosomes = 0;
+	my $bases = 0;
 	while (my $line = <$file>) {
 		chomp $line;
 		if ($line =~ /^>/) {
 			$name = substr($line, 1);
 			$name =~ s/\s.*$//;
 			$name = '' unless exists $chrom_set{$name};
-			print STDERR " $name" if $name;
+			print STDERR " $name" if $name and $verbose > 1;
+			$chromosomes++;
 		} elsif ($name ne '') {
 			$genome{$name} .= uc $line;
+			$bases += length $line;
 		}
 	}
 	close $file;
-	print STDERR " done.\n";
+	print STDERR ".\n  In total, $chromosomes chromosome(s), $bases base(s) loaded.\n" if $verbose > 1;
 
 	return \%genome;
 }
@@ -304,20 +338,19 @@ sub load_genes
 {
 	my $filename = shift;
 
-	open my $file, "-|", "zcat $filename" or die "Cannot read file '$filename'";
-	<$file>; # skip first line
+	my $col_names = [ '#bin', 'name', 'chrom', 'strand', 'txStart', 'txEnd', 'cdsStart', 'cdsEnd',
+		'exonCount', 'exonStarts', 'exonEnds', 'score', 'name2', 'cdsStartStat', 'cdsEndStat', 'exonFrames' ];
+	my $data = load_tsv $filename, $col_names;
 	my @genes = sort {
 			compare_genomic_range($a, $b)
 		} grep {
 			exists $chrom_set{$_->{chrom}}
 		} map {
-			my @s = split "\t";
 			{
-				chrom => $s[2], start => $s[4], end => $s[5], strand => $s[3],
-				gene => $s[12], transcript => $s[1]
+				chrom => $_->{chrom}, start => $_->{txStart}, end => $_->{txEnd},
+				strand => $_->{strand}, gene => $_->{name2}, transcript => $_->{name}
 			}
-		} <$file>;
-	close $file;
+		} @{$data->{data}};
 
 	return \@genes;
 }
@@ -326,11 +359,11 @@ sub infer_breakpoint
 {
 	my ($p, $min_clip) = @_;
 	if ($p->{strand} eq '+' and $p->{cigar} =~ /^((([0-9]+)[MID])+)([0-9]+)S$/) {
-		my $non_clip_cigar = $1;
+		my $cigar_without_clip = $1;
 		my $clipped = $4;
 		if ($clipped >= $min_clip) {
 			my $breakpoint = $p->{pos};
-			while ($non_clip_cigar =~ /([0-9]+)[MD]/g) {
+			while ($cigar_without_clip =~ /([0-9]+)[MD]/g) {
 				$breakpoint += $1;
 			}
 			return $breakpoint;
@@ -344,55 +377,238 @@ sub infer_breakpoint
 	return '-';
 }
 
-sub load_breakpoint_supports
+sub get_breakpoint_supports
 {
-	my ($filename, $min_clip) = @_;
+	my ($discordant_reads, $min_clip) = @_;
 
-	my @input_cols = ('id', 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2',
-		'cigar', 'cigar2', 'seq', 'seq2', 'qual', 'qual2');
-
-	open my $file, "<", $filename or die "Failed to read '$filename'";
-	my $line_no = 0;
 	my %data = ();
-	while (my $line = <$file>) {
-		chomp $line;
-		if (++$line_no == 1) {
-			die "Unexpected columns in '$filename'" if $line ne join("\t", @input_cols);
-			next;
-		}
-		my @s = split("\t", $line);
-		die "Unexpected column count at line $line_no in '$filename'" if $#s != $#input_cols;
-
-		my %f = map { $input_cols[$_] => $s[$_] } (0 .. $#s);
-
-		my $breakpoint = infer_breakpoint { strand => $f{strand}, cigar => $f{cigar}, pos => $f{pos} }, $min_clip;
-		my $breakpoint2 = infer_breakpoint { strand => $f{strand2}, cigar => $f{cigar2}, pos => $f{pos2} }, $min_clip;
+	for my $p (@{$discordant_reads}) {
+		my $breakpoint = infer_breakpoint { strand => $p->{strand}, cigar => $p->{cigar}, pos => $p->{pos} }, $min_clip;
+		my $breakpoint2 = infer_breakpoint { strand => $p->{strand2}, cigar => $p->{cigar2}, pos => $p->{pos2} }, $min_clip;
 
 		if ($breakpoint ne '-') {
-			my $key = join(':', $f{chrom}, $breakpoint, $f{strand});
-			push @{$data{$key}->{$f{pos}}}, { id => $f{id}, end => 1, seq => $f{seq}, qual => $f{qual} };
+			my $key = join(':', $p->{chrom}, $breakpoint, $p->{strand});
+			push @{$data{$key}->{$p->{pos}}}, { id => $p->{id}, end => 1, seq => $p->{seq}, qual => $p->{qual} };
 		}
 		if ($breakpoint2 ne '-') {
-			my $key = join(':', $f{chrom2}, $breakpoint2, $f{strand2});
-			push @{$data{$key}->{$f{pos2}}}, { id => $f{id}, end => 2, seq => $f{seq2}, qual => $f{qual2} };
+			my $key = join(':', $p->{chrom2}, $breakpoint2, $p->{strand2});
+			push @{$data{$key}->{$p->{pos2}}}, { id => $p->{id}, end => 2, seq => $p->{seq2}, qual => $p->{qual2} };
 		}
 	}
-	close $file;
-
 	return \%data;
+}
+
+sub match
+{
+	my ($a, $i, $b, $j, $n) = @_;
+
+	return 0 if $i + $n > scalar @{$a};
+	return 0 if $j + $n > scalar @{$b};
+
+	for my $k (0 .. ($n - 1)) {
+		return 0 if $a->[$i + $k] ne $b->[$j + $k];
+	}
+	return 1;
+}
+
+sub extend
+{
+	my ($target, $query, $opt) = @_;
+
+	my @t = split("", $target);
+	my @q = split("", $query);
+
+	my $max_allowed_mismatch = int(scalar(@q) * 0.1);  # allow 10% mismatch
+	my $max_allowed_indel = int(scalar(@q) * 0.05);    # allow 5% indel
+
+	my $mismatch = 0;
+	my $indel = 0;
+	my $i = 0;
+	my $j = 0;
+	while ($i <= $#t and $j <= $#q) {
+		if ($t[$i] eq $q[$j]) {
+			++$i; ++$j;
+		} else {
+			++$mismatch;
+			return 0 if $mismatch > $max_allowed_mismatch;
+			my $ok = 0;
+			if ($indel < $max_allowed_indel) {
+				for my $try_indel (1 .. $opt->{max_indel_size}) {
+					if (match(\@t, $i + $try_indel, \@q, $j, $opt->{match_for_indel})) {
+						++$indel;
+						$i += $try_indel + $opt->{match_for_indel};
+						$j += $opt->{match_for_indel};
+						$ok = 1;
+						last;
+					}
+					if (match(\@t, $i, \@q, $j + $try_indel, $opt->{match_for_indel})) {
+						++$indel;
+						$i += $opt->{match_for_indel};
+						$j += $try_indel + $opt->{match_for_indel};
+						$ok = 1;
+						last;
+					}
+				}
+			}
+			if (!$ok) {
+				++$i; ++$j;
+			}
+		}
+	}
+	return ($j >= $#q);
+}
+
+sub align
+{
+	my ($target, $query, $opt) = @_;
+
+	my $target_size = length($target);
+	my $query_size = length($query);
+
+	my $seed = $query;  # first n bases that should match exactly (to determine breakpoint)
+	my $rest = '';
+	if ($query_size > $opt->{seed_size}) {
+		$seed = substr($query, 0, $opt->{seed_size});
+		$rest = substr($query, $opt->{seed_size});
+	}
+
+	for my $pos (0 .. ($target_size - $query_size)) {
+		if (substr($target, $pos, $opt->{seed_size}) eq $seed) {  # exact-matched
+			if ($rest eq '' or extend(substr($target, $pos + $opt->{seed_size}), $rest, $opt)) {
+				return $pos;
+			}
+		}
+	}
+	return undef;
+}
+
+sub check_overlap
+{
+	my ($seq, $strand, $seq2, $strand2, $opt) = @_;
+
+	my $seq_len = length($seq);
+	die if $seq_len != length($seq2);
+
+	# convert back to original as in .fastq
+	$seq = rev_comp_seq($seq) if $strand eq '-';
+	$seq2 = rev_comp_seq($seq2) if $strand2 eq '-';
+
+	my $rseq2 = rev_comp_seq($seq2);  # rev-comp to compare
+
+	for (my $len = $seq_len; $len >= 10; --$len) {
+		my $x = align(substr($seq, 0, $len), substr($rseq2, $seq_len - $len, $len), $opt);
+		if (defined $x) {
+			return $len;
+		}
+	}
+	return undef;
+}
+
+sub add_breakpoint
+{
+	my ($breakpoints_ref, $chrom, $pos, $strand, $chrom2, $pos2, $strand2, $id) = @_;
+
+	my $key = join(':', $chrom, $pos, $strand);
+	my $key2 = join(':', $chrom2, $pos2, $strand2);
+	if (compare_genomic_coord2($key, $key2) <= 0) {
+		($key, $key2) = ($key2, $key);
+	}
+	$breakpoints_ref->{$key}->{$key2}->{$id}++;
+}
+
+sub try_split_and_align
+{
+	my ($genome, $chrom, $pos, $strand, $breakpoint, $seq, $cigar, $chrom2, $pos2, $strand2, $seq2, $id, $opt, $breakpoints_ref) = @_;
+print "=============== try_split_and_align\n";
+
+	my $o = check_overlap($seq, $strand, $seq2, $strand2, $opt);
+	if (defined $o) {
+		$seq = substr($seq, 0, $o);
+	}
+print "check_overlap: $o\n";
+
+	my $query;
+	if ($strand eq '+') {
+		my $query_clipped = 0;
+		if ($cigar =~ /([0-9]+)S$/) {
+			$query_clipped += $1;
+		}
+		$query = substr($seq, length($seq) - $query_clipped);
+	} else {
+		my $query_clipped = 0;
+		if ($cigar =~ /^([0-9]+)S/) {
+			$query_clipped += $1;
+		}
+		$query = rev_comp_seq(substr($seq, 0, $query_clipped));
+	}
+
+	my $target;
+	if ($strand2 eq '+') {
+		$target = substr($genome->{$chrom2}, $pos2, $opt->{max_fragment_size});
+	} else {
+		$target = substr($genome->{$chrom2}, $pos2 + length($seq2) - $opt->{max_fragment_size}, $opt->{max_fragment_size});
+	}
+	if ($strand eq $strand2) {
+		$target = rev_comp_seq($target);
+	}
+print "target: '$target'\n";
+print " query: '$query'\n";
+
+	my $x = align($target, $query, $opt);
+	if (defined $x) {
+print "   align at: $x\n";
+		my $breakpoint2;
+		if ($strand2 eq '+') {
+			$breakpoint2 = $pos2 + $x;
+		} else {
+			$breakpoint2 = $pos2 - $x;
+		}
+		add_breakpoint $breakpoints_ref, $chrom, $breakpoint, $strand, $chrom2, $breakpoint2, $strand2, $id;
+	} else {
+print "   align failed\n";
+	}
+}
+
+sub load_discordant_reads
+{
+	my $filename = shift;
+	my $col_names = [ 'id', 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2',
+		'cigar', 'cigar2', 'seq', 'seq2', 'qual', 'qual2' ];
+	my $data = load_tsv $filename, $col_names;
+	return $data->{data};
+}
+
+sub process_paired_reads
+{
+	my ($discordant_reads, $opt, $breakpoints_ref, $candidate_breakpoints_ref, $genome, $min_clip) = @_;
+print "process_paired_reads: ", Dumper $discordant_reads;
+
+	for my $p (@{$discordant_reads}) {
+		my $breakpoint = infer_breakpoint { strand => $p->{strand}, cigar => $p->{cigar}, pos => $p->{pos} }, $min_clip;
+		my $breakpoint2 = infer_breakpoint { strand => $p->{strand2}, cigar => $p->{cigar2}, pos => $p->{pos2} }, $min_clip;
+
+		if ($breakpoint ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom}}->{$breakpoint}->{$p->{strand}}) {
+			try_split_and_align $genome, $p->{chrom}, $p->{pos}, $p->{strand}, $breakpoint,
+				$p->{seq}, $p->{cigar}, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{seq2}, $p->{id}, $opt, $breakpoints_ref;
+		}
+		if ($breakpoint2 ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom2}}->{$breakpoint2}->{$p->{strand2}}) {
+			try_split_and_align $genome, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $breakpoint2,
+				$p->{seq2}, $p->{cigar2}, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{seq}, $p->{id}, $opt, $breakpoints_ref;
+		}
+	}
 }
 
 sub do_identify
 {
 	my $opt = parse_opt_identify @_;
 
-	my $breakpoint_supports = load_breakpoint_supports $opt->{input}, $opt->{min_clip};
-#print Dumper $breakpoint_supports;
+	my $discordant_reads = load_discordant_reads $opt->{input};
+	my $breakpoint_supports = get_breakpoint_supports $discordant_reads, $opt->{min_clip};
 
 	my $genes = load_genes $opt->{ref_gene} if $opt->{ref_gene};
 
 	my %candidate_breakpoints = ();
-	for my $key (sort{ compare_genomic_coord2($a, $b) }keys %{$breakpoint_supports}) {
+	for my $key (sort { compare_genomic_coord2($a, $b) } keys %{$breakpoint_supports}) {
 		my ($chrom, $pos, $strand) = split(':', $key);
 		my $supports = $breakpoint_supports->{$key};
 		my $supportingReads = 0;
@@ -419,204 +635,17 @@ sub do_identify
 			}
 		}
 
-		next if scalar keys %{$supports} < 2;
-		next if $opt->{ref_gene} ne '' and $gene eq '-';
+		print "[candidate]   $chrom\t$pos\t$strand\t" . scalar(keys(%{$supports})) . "\t$gene\t$transcript\n";
+		#next if scalar keys %{$supports} < 2;
+		#next if $opt->{ref_gene} ne '' and $gene eq '-';
 
-		$candidate_breakpoints{$chrom}->{$pos}->{$strand} = 1;
+		$candidate_breakpoints{$chrom}->{$pos}->{$strand} = { supports => scalar keys %{$supports}, gene => $gene, transcript => $transcript };
 	}
-#print Dumper \%candidate_breakpoints;
-	print "Candidate breakpings: ", scalar keys %{candidate_breakpoints}, "\n";
+	print "Candidate breakpioints: ", scalar keys %{candidate_breakpoints}, "\n";
 
-	sub match
-	{
-		my ($a, $i, $b, $j, $n) = @_;
-
-		return 0 if $i + $n > scalar @{$a};
-		return 0 if $j + $n > scalar @{$b};
-
-		for my $k (0 .. ($n - 1)) {
-			return 0 if $a->[$i + $k] ne $b->[$j + $k];
-		}
-		return 1;
-	}
-
-	sub extend
-	{
-		my ($target, $query, $opt) = @_;
-
-		my @t = split("", $target);
-		my @q = split("", $query);
-
-		my $max_allowed_mismatch = int(scalar(@q) * 0.1);  # allow 10% mismatch
-		my $max_allowed_indel = int(scalar(@q) * 0.05);    # allow 5% indel
-
-		my $mismatch = 0;
-		my $indel = 0;
-		my $i = 0;
-		my $j = 0;
-		while ($i <= $#t and $j <= $#q) {
-			if ($t[$i] eq $q[$j]) {
-				++$i; ++$j;
-			} else {
-				++$mismatch;
-				return 0 if $mismatch > $max_allowed_mismatch;
-				my $ok = 0;
-				if ($indel < $max_allowed_indel) {
-					for my $try_indel (1 .. $opt->{max_indel_size}) {
-						if (match(\@t, $i + $try_indel, \@q, $j, $opt->{match_for_indel})) {
-							++$indel;
-							$i += $try_indel + $opt->{match_for_indel};
-							$j += $opt->{match_for_indel};
-							$ok = 1;
-							last;
-						}
-						if (match(\@t, $i, \@q, $j + $try_indel, $opt->{match_for_indel})) {
-							++$indel;
-							$i += $opt->{match_for_indel};
-							$j += $try_indel + $opt->{match_for_indel};
-							$ok = 1;
-							last;
-						}
-					}
-				}
-				if (!$ok) {
-					++$i; ++$j;
-				}
-			}
-		}
-		return ($j >= $#q);
-	}
-
-	sub align
-	{
-		my ($target, $query, $opt) = @_;
-
-		my $target_size = length($target);
-		my $query_size = length($query);
-
-		my $seed = $query;  # first n bases that should match exactly (to determine breakpoint)
-		my $rest = '';
-		if ($query_size > $opt->{seed_size}) {
-			$seed = substr($query, 0, $opt->{seed_size});
-			$rest = substr($query, $opt->{seed_size});
-		}
-
-		for my $pos (0 .. ($target_size - $query_size)) {
-			if (substr($target, $pos, $opt->{seed_size}) eq $seed) {  # exact-matched
-				if ($rest eq '' or extend(substr($target, $pos + $opt->{seed_size}), $rest, $opt)) {
-					return $pos;
-				}
-			}
-		}
-		return undef;
-	}
-
-	sub check_overlap
-	{
-		my ($seq, $strand, $seq2, $strand2, $opt) = @_;
-
-		my $seq_len = length($seq);
-		die if $seq_len != length($seq2);
-
-		# convert back to original as in .fastq
-		$seq = rev_comp_seq($seq) if $strand eq '-';
-		$seq2 = rev_comp_seq($seq2) if $strand2 eq '-';
-
-		my $rseq2 = rev_comp_seq($seq2);  # rev-comp to compare
-
-		for (my $len = $seq_len; $len >= 10; --$len) {
-			my $x = align(substr($seq, 0, $len), substr($rseq2, $seq_len - $len, $len), $opt);
-			if (defined $x) {
-				return $len;
-			}
-		}
-		return undef;
-	}
-
+	my $genome = load_genome $opt->{genome_fasta}, $opt->{verbose};
 	my %breakpoints = ();
-
-	sub add_breakpoint
-	{
-		my ($breakpoints_ref, $chrom, $pos, $strand, $chrom2, $pos2, $strand2, $id) = @_;
-
-		my $key = join(':', $chrom, $pos, $strand);
-		my $key2 = join(':', $chrom2, $pos2, $strand2);
-		if (compare_genomic_coord2($key, $key2) <= 0) {
-			($key, $key2) = ($key2, $key);
-		}
-		$breakpoints_ref->{$key}->{$key2}->{$id}++;
-	}
-
-	sub try_split_and_align
-	{
-		my ($genome, $chrom, $pos, $strand, $breakpoint, $seq, $cigar, $chrom2, $pos2, $strand2, $seq2, $id, $opt, $breakpoints_ref) = @_;
-
-		my $o = check_overlap($seq, $strand, $seq2, $strand2, $opt);
-		if (defined $o) {
-			$seq = substr($seq, 0, $o);
-		}
-
-		my $query;
-		if ($strand eq '+') {
-			my $query_clipped = 0;
-			if ($cigar =~ /([0-9]+)S$/) {
-				$query_clipped += $1;
-			}
-			$query = substr($seq, length($seq) - $query_clipped);
-		} else {
-			my $query_clipped = 0;
-			if ($cigar =~ /^([0-9]+)S/) {
-				$query_clipped += $1;
-			}
-			$query = rev_comp_seq(substr($seq, 0, $query_clipped));
-		}
-
-		my $target;
-		if ($strand2 eq '+') {
-			$target = substr($genome->{$chrom2}, $pos2, $opt->{max_fragment_size});
-		} else {
-			$target = substr($genome->{$chrom2}, $pos2 + length($seq2) - $opt->{max_fragment_size}, $opt->{max_fragment_size});
-		}
-		if ($strand eq $strand2) {
-			$target = rev_comp_seq($target);
-		}
-
-		my $x = align($target, $query, $opt);
-		if (defined $x) {
-			my $breakpoint2;
-			if ($strand2 eq '+') {
-				$breakpoint2 = $pos2 + $x;
-			} else {
-				$breakpoint2 = $pos2 - $x;
-			}
-			add_breakpoint $breakpoints_ref, $chrom, $breakpoint, $strand, $chrom2, $breakpoint2, $strand2, $id;
-		}
-	}
-
-	sub process_paired_reads
-	{
-		my ($filename, $opt, $breakpoints_ref, $candidate_breakpoints_ref, $genome) = @_;
-
-		open my $file, "<", $filename or die "Failed to read '$filename'";
-		<$file>;  # skip first line
-		while (my $line = <$file>) {
-			chomp $line;
-			my ($chrom, $pos, $strand, $breakpoint, $cigar,
-				$chrom2, $pos2, $strand2, $breakpoint2, $cigar2,
-				$id, $seq, $seq2, $qual, $qual2) = split("\t", $line);
-
-			if ($breakpoint ne '-' and exists $candidate_breakpoints_ref->{$chrom}->{$breakpoint}->{$strand}) {
-				try_split_and_align $genome, $chrom, $pos, $strand, $breakpoint, $seq, $cigar, $chrom2, $pos2, $strand2, $seq2, $id, $opt, $breakpoints_ref;
-			}
-			if ($breakpoint2 ne '-' and exists $candidate_breakpoints_ref->{$chrom2}->{$breakpoint2}->{$strand2}) {
-				try_split_and_align $genome, $chrom2, $pos2, $strand2, $breakpoint2, $seq2, $cigar2, $chrom, $pos, $strand, $seq, $id, $opt, $breakpoints_ref;
-			}
-		}
-		close $file;
-	}
-
-	my $genome = load_genome $opt->{genome_fasta};
-	process_paired_reads $opt->{input}, $opt, \%breakpoints, \%candidate_breakpoints, $genome;
+	process_paired_reads $discordant_reads, $opt, \%breakpoints, \%candidate_breakpoints, $genome, $opt->{min_clip};
 
 	open my $output, ">", $opt->{output} or die "Failed to write '$opt->{output}'";
 	my @output_cols = ('chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2', 'id');
