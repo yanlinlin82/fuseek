@@ -728,6 +728,71 @@ sub do_refine
 }
 
 #==========================================================#
+# command 'sort'
+
+my $def_opt_sort = {
+	verbose => 0,
+	input   => '',
+	output  => '/dev/stdout',
+	reverse => 0,
+};
+
+sub print_usage_sort
+{
+	print "
+Usage: fuseek sort [options] <fusions.txt> [output.txt]
+
+Options:
+   <fusions.txt>   input TAB-sep file of fusions
+   [output.txt]    output text file of sorted fusions
+   -r              sort reversely
+   -v              show verbose messages
+   -h / --help     show this help message
+
+";
+	exit 1;
+}
+
+sub parse_opt_sort
+{
+	my %opt = %{$def_opt_sort};  # deep copy
+
+	my @args = ();
+	while (my $arg = shift) {
+		if ($arg eq '-r') {
+			$opt{reverse} = 1;
+		} elsif ($arg eq '-v') {
+			++$opt{verbose};
+		} elsif ($arg eq '-h' or $arg eq '--help') {
+			print_usage_sort
+		} else {
+			err "Unknown option '$arg'!" if $arg =~ /^-/;
+			err "Unexpected parameter '$arg'!" if scalar @args >= 1;
+			push @args, $arg;
+		}
+	}
+	print_usage_sort if scalar @args < 1;
+	$opt{input} = shift @args;
+	$opt{output} = shift @args if @args;
+
+	return \%opt;
+}
+
+sub do_sort
+{
+	my $opt = parse_opt_sort @_;
+
+	my $fusions = load_tsv $opt->{input};
+
+	open my $output, '>', $opt->{output} or err "Failed to write '$opt->{output}'";
+	my $reverse = ($opt->{reverse} ? -1 : 1);
+	for my $item (sort { compare_fusion($a, $b) * $reverse } @{$fusions->{data}}) {
+		print $output join("\t", map { $item->{$_} } @{$fusions->{names}}), "\n";
+	}
+	close $output;
+}
+
+#==========================================================#
 # command 'annotate'
 
 my $def_opt_annotate = {
@@ -885,7 +950,7 @@ sub do_annotate
 	print $output join("\t",
 		'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2',
 		'gene', 'transcript', 'exon', 'anno', 'gene2', 'transcript2', 'exon2', 'anno2'), "\n";
-	for my $item (sort { compare_fusion($a, $b) } @{$fusions->{data}}) {
+	for my $item (@{$fusions->{data}}) {
 
 		print $output join("\t", $item->{chrom}, $item->{pos}, $item->{strand},
 			$item->{chrom2}, $item->{pos2}, $item->{strand2}), "\t";
@@ -1004,6 +1069,7 @@ my %commands = (
 	collect  => \&do_collect,
 	identify => \&do_identify,
 	refine   => \&do_refine,
+	sort     => \&do_sort,
 	annotate => \&do_annotate,
 	run      => \&do_run,
 	version  => sub { print $version, "\n"; }
@@ -1022,6 +1088,7 @@ Commands:
    collect    collect discordant reads from BAM file
    identify   identify fusions from discordant reads
    refine     refine breakpoints of fusions
+   sort       sort fusions by genomic coordinates
    annotate   annotate fusions
 
 ";
