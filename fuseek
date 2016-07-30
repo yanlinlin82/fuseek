@@ -316,7 +316,7 @@ sub check_overlap
 }
 
 #==========================================================#
-# 'collect'
+# command 'collect'
 
 my $def_opt_collect = {
 	verbose  => 0,
@@ -444,7 +444,7 @@ sub do_collect
 }
 
 #==========================================================#
-# 'identify'
+# command 'identify'
 
 my $def_opt_identify = {
 	verbose      => 0,
@@ -700,7 +700,7 @@ sub do_identify
 }
 
 #==========================================================#
-# 'refine'
+# command 'refine'
 
 my $def_opt_refine = {
 	verbose => 0,
@@ -731,7 +731,7 @@ sub do_refine
 }
 
 #==========================================================#
-# 'annotate'
+# command 'annotate'
 
 my $def_opt_annotate = {
 	verbose      => 0,
@@ -915,7 +915,7 @@ sub do_annotate
 }
 
 #==========================================================#
-# 'run'
+# command 'run'
 
 my $def_opt_run = {
 	verbose    => 0,
@@ -991,8 +991,18 @@ sub do_run
 }
 
 #==========================================================#
+# main procedure
 
 my $version = "0.0.1";
+
+my %commands = (
+	collect  => \&do_collect,
+	identify => \&do_identify,
+	refine   => \&do_refine,
+	annotate => \&do_annotate,
+	run      => \&do_run,
+	version  => sub { print $version, "\n"; }
+);
 
 sub print_usage
 {
@@ -1013,19 +1023,8 @@ Commands:
 	exit 1;
 }
 
-#----------------------------------------------------------#
-
 print_usage unless @ARGV;
 
-my %proc = (
-	collect  => \&do_collect,
-	identify => \&do_identify,
-	refine   => \&do_refine,
-	annotate => \&do_annotate,
-	run      => \&do_run,
-	version  => sub { print $version, "\n"; }
-);
-
 my $cmd = shift;
-err "Unknown command '$cmd'!" unless exists $proc{$cmd};
-exit $proc{$cmd}->(@ARGV);
+err "Unknown command '$cmd'!" unless exists $commands{$cmd};
+exit $commands{$cmd}->(@ARGV);
