@@ -21,6 +21,27 @@ sub err
 	exit 1;
 }
 
+sub prep_dir
+{
+	my @dir_names = split('/', shift);  # split path to names of each level
+	pop @dir_names;                     # drop last one (file name but not dir name)
+	if (@dir_names) {
+		for my $i (0 .. $#dir_names) {
+			my $path = join('/', @dir_names[0 .. $i]);
+			if (not -d $path) {
+				mkdir $path or die "Failed to create directory '$path'";
+			}
+		}
+	}
+}
+
+sub time_str
+{
+	my $timestap = shift;
+	my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime $timestap;
+	return sprintf '%04d-%02d-%02d %02d:%02d:%02d', $year + 1900, $mon, $mday, $hour, $min, $sec;
+}
+
 sub compare_genomic_coord
 {
 	my ($chrom, $pos, $strand, $chrom2, $pos2, $strand2) = @_;
@@ -198,13 +219,6 @@ sub parse_opt_collect
 	$opt{output} = shift @args if @args;
 
 	return \%opt;
-}
-
-sub time_str
-{
-	my $timestap = shift;
-	my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime $timestap;
-	return sprintf '%04d-%02d-%02d %02d:%02d:%02d', $year + 1900, $mon, $mday, $hour, $min, $sec;
 }
 
 sub do_collect
@@ -941,20 +955,6 @@ sub parse_opt_run
 	$opt{out_prefix} = shift @args;
 
 	return \%opt;
-}
-
-sub prep_dir
-{
-	my @dir_names = split('/', shift);  # split path to names of each level
-	pop @dir_names;                     # drop last one (file name but not dir name)
-	if (@dir_names) {
-		for my $i (0 .. $#dir_names) {
-			my $path = join('/', @dir_names[0 .. $i]);
-			if (not -d $path) {
-				mkdir $path or die "Failed to create directory '$path'";
-			}
-		}
-	}
 }
 
 sub do_run
