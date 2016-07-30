@@ -384,7 +384,8 @@ sub do_collect
 
 	my $last_time = time;
 	my $last_total = 0;
-	print $output join("\t", 'id', 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2',
+	print $output join("\t",
+		'id', 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2',
 		'cigar', 'cigar2', 'seq', 'seq2', 'qual', 'qual2'), "\n";
 	my %data = ();
 	my $total = 0;
@@ -509,43 +510,18 @@ sub parse_opt_identify
 	return \%opt;
 }
 
-sub infer_breakpoint
-{
-	my ($p, $min_clip) = @_;
-	if ($p->{strand} eq '+' and $p->{cigar} =~ /^((([0-9]+)[MID])+)([0-9]+)S$/) {
-		my $cigar_without_clip = $1;
-		my $clipped = $4;
-		if ($clipped >= $min_clip) {
-			my $breakpoint = $p->{pos};
-			while ($cigar_without_clip =~ /([0-9]+)[MD]/g) {
-				$breakpoint += $1;
-			}
-			return $breakpoint;
-		}
-	} elsif ($p->{strand} eq '-' and $p->{cigar} =~ /^([0-9]+)S(([0-9]+)[MID])+$/) {
-		my $clipped = $1;
-		if ($clipped >= $min_clip) {
-			return $p->{pos};
-		}
-	}
-	return '-';
-}
-
 sub get_breakpoint_supports
 {
-	my ($discordant_reads, $min_clip) = @_;
+	my ($discord) = @_;
 
 	my %data = ();
-	for my $p (@{$discordant_reads}) {
-		my $breakpoint = infer_breakpoint { strand => $p->{strand}, cigar => $p->{cigar}, pos => $p->{pos} }, $min_clip;
-		my $breakpoint2 = infer_breakpoint { strand => $p->{strand2}, cigar => $p->{cigar2}, pos => $p->{pos2} }, $min_clip;
-
-		if ($breakpoint ne '-') {
-			my $key = join(':', $p->{chrom}, $breakpoint, $p->{strand});
+	for my $p (@{$discord}) {
+		if ($p->{breakpoint} ne '-') {
+			my $key = join(':', $p->{chrom}, $p->{breakpoint}, $p->{strand});
 			push @{$data{$key}->{$p->{pos}}}, { id => $p->{id}, end => 1, seq => $p->{seq}, qual => $p->{qual} };
 		}
-		if ($breakpoint2 ne '-') {
-			my $key = join(':', $p->{chrom2}, $breakpoint2, $p->{strand2});
+		if ($p->{breakpoint2} ne '-') {
+			my $key = join(':', $p->{chrom2}, $p->{breakpoint2}, $p->{strand2});
 			push @{$data{$key}->{$p->{pos2}}}, { id => $p->{id}, end => 2, seq => $p->{seq2}, qual => $p->{qual2} };
 		}
 	}
@@ -644,30 +620,52 @@ sub load_discordant_reads
 
 sub process_paired_reads
 {
-	my ($discordant_reads, $opt, $breakpoints_ref, $candidate_breakpoints_ref, $genome, $min_clip) = @_;
-	#print "process_paired_reads: ", Dumper $discordant_reads;
+	my ($discord, $opt, $breakpoints_ref, $candidate_breakpoints_ref, $genome) = @_;
 
-	for my $p (@{$discordant_reads}) {
-		my $breakpoint = infer_breakpoint { strand => $p->{strand}, cigar => $p->{cigar}, pos => $p->{pos} }, $min_clip;
-		my $breakpoint2 = infer_breakpoint { strand => $p->{strand2}, cigar => $p->{cigar2}, pos => $p->{pos2} }, $min_clip;
-
-		if ($breakpoint ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom}}->{$breakpoint}->{$p->{strand}}) {
-			try_split_and_align $genome, $p->{chrom}, $p->{pos}, $p->{strand}, $breakpoint,
+	for my $p (@{$discord}) {
+		if ($p->{breakpoint} ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom}}->{$p->{breakpoint}}->{$p->{strand}}) {
+			try_split_and_align $genome, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{breakpoint},
 				$p->{seq}, $p->{cigar}, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{seq2}, $p->{cigar2}, $p->{id}, $opt, $breakpoints_ref;
 		}
-		if ($breakpoint2 ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom2}}->{$breakpoint2}->{$p->{strand2}}) {
-			try_split_and_align $genome, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $breakpoint2,
+		if ($p->{breakpoint2} ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom2}}->{$p->{breakpoint2}}->{$p->{strand2}}) {
+			try_split_and_align $genome, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{breakpoint2},
 				$p->{seq2}, $p->{cigar2}, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{seq}, $p->{cigar}, $p->{id}, $opt, $breakpoints_ref;
 		}
 	}
+}
+
+sub infer_breakpoint
+{
+	my ($strand, $cigar, $pos, $min_clip) = @_;
+	if ($strand eq '+' and $cigar =~ /^((([0-9]+)[MID])+)([0-9]+)S$/) {
+		my $cigar_without_clip = $1;
+		my $clipped = $4;
+		if ($clipped >= $min_clip) {
+			my $breakpoint = $pos;
+			while ($cigar_without_clip =~ /([0-9]+)[MD]/g) {
+				$breakpoint += $1;
+			}
+			return $breakpoint;
+		}
+	} elsif ($strand eq '-' and $cigar =~ /^([0-9]+)S(([0-9]+)[MID])+$/) {
+		my $clipped = $1;
+		if ($clipped >= $min_clip) {
+			return $pos;
+		}
+	}
+	return '-';
 }
 
 sub do_identify
 {
 	my $opt = parse_opt_identify @_;
 
-	my $discordant_reads = load_discordant_reads $opt->{input};
-	my $breakpoint_supports = get_breakpoint_supports $discordant_reads, $opt->{min_clip};
+	my $discord = load_discordant_reads $opt->{input};
+	for my $p (@{$discord}) {
+		$p->{breakpoint} = infer_breakpoint $p->{strand}, $p->{cigar}, $p->{pos}, $opt->{min_clip};
+		$p->{breakpoint2} = infer_breakpoint $p->{strand2}, $p->{cigar2}, $p->{pos2}, $opt->{min_clip};
+	}
+	my $breakpoint_supports = get_breakpoint_supports $discord;
 
 	my %candidate_breakpoints = ();
 	for my $key (sort { compare_genomic_coord2($a, $b) } keys %{$breakpoint_supports}) {
@@ -684,11 +682,10 @@ sub do_identify
 
 	my $genome = load_genome $opt->{genome}, $opt->{verbose};
 	my %breakpoints = ();
-	process_paired_reads $discordant_reads, $opt, \%breakpoints, \%candidate_breakpoints, $genome, $opt->{min_clip};
+	process_paired_reads $discord, $opt, \%breakpoints, \%candidate_breakpoints, $genome, $opt->{min_clip};
 
 	open my $output, ">", $opt->{output} or err "Failed to write '$opt->{output}'";
-	my @output_cols = ('chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2', 'id');
-	print $output join("\t", @output_cols), "\n";
+	print $output join("\t", 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2', 'id'), "\n";
 	for my $key (sort { compare_genomic_coord2($a, $b) } keys %breakpoints) {
 		for my $key2 (sort { compare_genomic_coord2($a, $b) } keys %{$breakpoints{$key}}) {
 			for my $id (sort keys %{$breakpoints{$key}->{$key2}}) {
@@ -886,10 +883,8 @@ sub do_annotate
 	open my $output, '>', $opt->{output} or err "Failed to write '$opt->{output}'";
 
 	print $output join("\t",
-		'chrom', 'pos', 'strand',
-		'chrom2', 'pos2', 'strand2',
-		'gene', 'transcript', 'exon', 'anno',
-		'gene2', 'transcript2', 'exon2', 'anno2'), "\n";
+		'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2',
+		'gene', 'transcript', 'exon', 'anno', 'gene2', 'transcript2', 'exon2', 'anno2'), "\n";
 	for my $item (sort { compare_fusion($a, $b) } @{$fusions->{data}}) {
 		my $anno1 = annotate_breakpoint $genes, $item->{chrom}, $item->{pos}, $item->{strand};
 		next unless @{$anno1};
