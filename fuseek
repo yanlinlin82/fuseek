@@ -275,6 +275,7 @@ sub do_collect
 			delete $data{$id};
 			$count += 2;
 		}
+
 		if ($opt->{verbose} > 1 and $total - $last_total >= 100000) {
 			my $now = time;
 			if ($now - $last_time >= 10) {
@@ -302,11 +303,11 @@ my $def_opt_identify = {
 	min_clip     => 10,
 	min_supp     => 2,
 
-	seed_size         => 8,
-	max_fragment_size => 1000,
-	rev_expand_size   => 100,
-	max_indel_size    => 3,
-	match_for_indel   => 5
+	seed_size         => 8,     # 'seed' is for exact-matching at beginning of two sequences to align
+	max_fragment_size => 1000,  # search space (expand to downstream) for peer read
+	rev_expand_size   => 100,   # search space (expand to upstream) for peer read
+	max_indel_size    => 3,     # maximum indel size to search
+	match_for_indel   => 5      # how many bases required to match exactly after indel
 };
 
 sub print_usage_identify
