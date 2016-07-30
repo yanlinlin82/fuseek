@@ -8,9 +8,9 @@ use List::BinarySearch qw( binsearch );
 # common variables
 
 my @chrom_set = map { "chr$_" } (1..22, "X", "Y");  # only consider: chr1..22, X & Y
-my %chrom_set = map { $chrom_set[$_] => $_ } (0 .. $#chrom_set);
+my %chrom_order = map { $chrom_set[$_] => $_ } (0 .. $#chrom_set);
 
-my %strand_set = ( '+' => 0, '-' => 1 );
+my %strand_order = ( '+' => 0, '-' => 1 );
 
 #==========================================================#
 # useful functions
@@ -24,11 +24,11 @@ sub err
 sub compare_genomic_coord
 {
 	my ($chrom, $pos, $strand, $chrom2, $pos2, $strand2) = @_;
-	my $res = $chrom_set{$chrom} <=> $chrom_set{$chrom2};
+	my $res = $chrom_order{$chrom} <=> $chrom_order{$chrom2};
 	if ($res == 0) {
 		$res = $pos <=> $pos2;
 		if ($res == 0) {
-			$res = $strand_set{$strand} <=> $strand_set{$strand2};
+			$res = $strand_order{$strand} <=> $strand_order{$strand2};
 		}
 	}
 	return $res;
@@ -45,13 +45,13 @@ sub compare_genomic_coord2
 sub compare_genomic_range
 {
 	my ($p, $q) = @_;
-	my $res = $chrom_set{$p->{chrom}} <=> $chrom_set{$q->{chrom}};
+	my $res = $chrom_order{$p->{chrom}} <=> $chrom_order{$q->{chrom}};
 	if ($res == 0) {
 		$res = $p->{start} <=> $q->{start};
 		if ($res == 0) {
 			$res = $p->{end} <=> $q->{end};
 			if ($res == 0) {
-				$res = $strand_set{$p->{strand}} <=> $strand_set{$q->{strand}};
+				$res = $strand_order{$p->{strand}} <=> $strand_order{$q->{strand}};
 			}
 		}
 	}
@@ -61,7 +61,7 @@ sub compare_genomic_range
 sub compare_pos_and_range
 {
 	my ($a, $b) = @_;
-	my $res = $chrom_set{$a->{chrom}} <=> $chrom_set{$b->{chrom}};
+	my $res = $chrom_order{$a->{chrom}} <=> $chrom_order{$b->{chrom}};
 	if ($res == 0) {
 		if ($a->{pos} < $b->{start}) {
 			$res = -1;
@@ -129,7 +129,7 @@ sub load_genome
 		if ($line =~ /^>/) {
 			$name = substr($line, 1);
 			$name =~ s/\s.*$//;
-			$name = '' unless exists $chrom_set{$name};
+			$name = '' unless exists $chrom_order{$name};
 			print STDERR " $name" if $name and $verbose > 1;
 			$chromosomes++;
 		} elsif ($name ne '') {
@@ -200,16 +200,25 @@ sub parse_opt_collect
 	return \%opt;
 }
 
+sub time_str
+{
+	my $timestap = shift;
+	my ($sec, $min, $hour, $mday, $mon, $year, $wday, $yday, $isdst) = localtime $timestap;
+	return sprintf '%04d-%02d-%02d %02d:%02d:%02d', $year + 1900, $mon, $mday, $hour, $min, $sec;
+}
+
 sub do_collect
 {
 	my $opt = parse_opt_collect @_;
 
-	my $samtools_options = "-F 0x70C";  # filter out: unmapped, secondary, QC-failed, duplicated
+	my $samtools_options = "-F 0xF00";  # filter out: secondary (0x100), QC-failed (0x200), duplicated (0x400), supplementary (0x800)
 	my $command_line = "$opt->{samtools} view $samtools_options $opt->{input}";
 
 	open my $input, "-|", $command_line or die "Failed to view '$opt->{input}'";
 	open my $output, ">", $opt->{output} or die "Failed to write '$opt->{output}'";
 
+	my $last_time = time;
+	my $last_total = 0;
 	print $output join("\t", 'id', 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2',
 		'cigar', 'cigar2', 'seq', 'seq2', 'qual', 'qual2'), "\n";
 	my %data = ();
@@ -224,8 +233,8 @@ sub do_collect
 		next if $map_qual == 0;                                    # skip multiple-mapped
 		next if $chrom2 eq '=' and abs($dist) < $opt->{min_dist};  # skip concordant
 		$chrom2 = $chrom if $chrom2 eq '=';                        # update peer chrom name
-		next if not exists $chrom_set{$chrom};                     # skip super-contigs
-		next if not exists $chrom_set{$chrom2};                    # skip super-contigs (peer)
+		next if not exists $chrom_order{$chrom};                   # skip super-contigs
+		next if not exists $chrom_order{$chrom2};                  # skip super-contigs (peer)
 
 		my $strand = (($flags & 0x10) ? '-' : '+');
 		my $strand2 = (($flags & 0x20) ? '-' : '+');
@@ -252,11 +261,20 @@ sub do_collect
 			delete $data{$id};
 			$count += 2;
 		}
+		if ($opt->{verbose} > 1 and $total - $last_total >= 100000) {
+			my $now = time;
+			if ($now - $last_time >= 10) {
+				printf STDERR '[' . time_str($now) . "] $total alignments scanned, and $count selected.         \r",
+				$last_time = $now;
+				$last_total = $total;
+			}
+		}
 	}
 	close $output;
 	close $input;
 
-	print STDERR "$total alignment(s) scanned, and $count selected.\n" if $opt->{verbose} > 0;
+	printf STDERR "\n[" . time_str(time) . '] ' if $opt->{verbose} > 1 and $last_total > 0;
+	print STDERR "All $total alignment(s) scanned, and $count selected.\n" if $opt->{verbose} > 0;
 }
 
 #==========================================================#
@@ -334,7 +352,7 @@ sub load_genes
 	my @genes = sort {
 			compare_genomic_range($a, $b)
 		} grep {
-			exists $chrom_set{$_->{chrom}}
+			exists $chrom_order{$_->{chrom}}
 		} map {
 			my $exonCount = $_->{exonCount};
 			my @exonStarts = ();
