@@ -886,25 +886,35 @@ sub do_annotate
 		'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2',
 		'gene', 'transcript', 'exon', 'anno', 'gene2', 'transcript2', 'exon2', 'anno2'), "\n";
 	for my $item (sort { compare_fusion($a, $b) } @{$fusions->{data}}) {
+
+		print $output join("\t", $item->{chrom}, $item->{pos}, $item->{strand},
+			$item->{chrom2}, $item->{pos2}, $item->{strand2}), "\t";
+
 		my $anno1 = annotate_breakpoint $genes, $item->{chrom}, $item->{pos}, $item->{strand};
-		next unless @{$anno1};
+		if (@{$anno1}) {
+			print $output join("\t",
+				join(";", map { $_->{gene} } @{$anno1}),
+				join(";", map { $_->{transcript} } @{$anno1}),
+				join(";", map { $_->{exon} } @{$anno1}),
+				join(";", map { parse_pos $_, $item->{strand} } @{$anno1}));
+		} else {
+			print $output join("\t", ( "-" ) x 4);
+		}
+
+		print $output "\t";
 
 		my $anno2 = annotate_breakpoint $genes, $item->{chrom2}, $item->{pos2}, $item->{strand2};
-		next unless @{$anno2};
-
-		for my $sub1 (@{$anno1}) {
-			for my $sub2 (@{$anno2}) {
-				my $pos1 = parse_pos($sub1, $item->{strand});
-				my $pos2 = parse_pos($sub2, $item->{strand2});
-
-				print $output join("\t",
-					$item->{chrom}, $item->{pos}, $item->{strand},
-					$item->{chrom2}, $item->{pos2}, $item->{strand2},
-					$sub1->{gene}, $sub1->{transcript}, $sub1->{exon}, $pos1,
-					$sub2->{gene}, $sub2->{transcript}, $sub2->{exon}, $pos2
-					), "\n";
-			}
+		if (@{$anno2}) {
+			print $output join("\t",
+				join(";", map { $_->{gene} } @{$anno2}),
+				join(";", map { $_->{transcript} } @{$anno2}),
+				join(";", map { $_->{exon} } @{$anno2}),
+				join(";", map { parse_pos $_, $item->{strand} } @{$anno2}));
+		} else {
+			print $output join("\t", ( "-" ) x 4);
 		}
+
+		print $output "\n";
 	}
 	close $output;
 }
