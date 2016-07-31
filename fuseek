@@ -806,7 +806,7 @@ sub do_refine
 	close $input;
 
 	open my $output, '>', $opt->{output} or err "Failed to write '$opt->{output}'";
-	print join("\t", 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2', 'supports', 'depth1', 'depth2', 'freq1', 'freq2', 'freq'), "\n";
+	print $output join("\t", 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2', 'supports', 'depth1', 'depth2', 'freq1', 'freq2', 'freq'), "\n";
 	for my $key (@results) {
 		my ($chrom, $pos, $strand, $chrom2, $pos2, $strand2) = split(':', $key);
 		my $count = $supports{$key};
@@ -848,7 +848,7 @@ sub do_refine
 			$freq = '-';
 		}
 
-		print join("\t", $chrom, $pos, $strand, $chrom2, $pos2, $strand2,
+		print $output join("\t", $chrom, $pos, $strand, $chrom2, $pos2, $strand2,
 			$count, $depth1, $depth2, $freq1, $freq2, $freq), "\n";
 	}
 	close $output;
