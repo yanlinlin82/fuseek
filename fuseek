@@ -2,6 +2,7 @@
 use strict;
 use warnings 'all';
 use Data::Dumper;
+use File::Temp qw/ :POSIX /;
 use List::BinarySearch qw( binsearch );
 
 #==========================================================#
@@ -767,6 +768,7 @@ sub do_refine
 	my $opt = parse_opt_refine @_;
 
 	my $breakpoints = load_tsv $opt->{input};
+
 	my @results = ();
 	my %supports = ();
 	my %pos_list = ();
@@ -781,8 +783,17 @@ sub do_refine
 		$pos_list{$p->{chrom2}}->{$p->{pos2}} = 0;
 	}
 
+	my $temp_file = tmpnam();
+	open my $file, ">", $temp_file or err "Can not open file '$temp_file' to write";
+	for my $chrom (keys %pos_list) {
+		for my $pos (keys %{$pos_list{$chrom}}) {
+			print $file $chrom, "\t", $pos, "\n";
+		}
+	}
+	close $file;
+
 	my $samtools_options = "-F 0xF00";  # filter out: secondary (0x100), QC-failed (0x200), duplicated (0x400), supplementary (0x800)
-	$samtools_options .= " -L $opt->{regions}" if $opt->{regions};
+	$samtools_options .= " -L $temp_file";
 	my $command_line = "$opt->{samtools} view $samtools_options $opt->{in_bam}";
 	open my $input, "-|", $command_line or err "Failed to view '$opt->{in_bam}'";
 	while (my $line = <$input>) {
@@ -804,6 +815,8 @@ sub do_refine
 		}
 	}
 	close $input;
+
+	unlink $temp_file;
 
 	open my $output, '>', $opt->{output} or err "Failed to write '$opt->{output}'";
 	print $output join("\t", 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2', 'supports', 'depth1', 'depth2', 'freq1', 'freq2', 'freq'), "\n";
@@ -1074,9 +1087,10 @@ sub do_annotate
 
 	open my $output, '>', $opt->{output} or err "Failed to write '$opt->{output}'";
 
-	print $output join("\t",
-		'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2',
-		'gene', 'transcript', 'exon', 'anno', 'gene2', 'transcript2', 'exon2', 'anno2'), "\n";
+	my @nameSet1 = ('chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2');
+	my %nameSet1 = map { $_ => 1 } @nameSet1;
+	my @nameSet2 = grep { ! exists $nameSet1{$_} } @{$fusions->{names}};
+	print $output join("\t", @nameSet1, 'gene', 'transcript', 'exon', 'anno', 'gene2', 'transcript2', 'exon2', 'anno2', @nameSet2), "\n";
 	for my $item (@{$fusions->{data}}) {
 
 		print $output join("\t", $item->{chrom}, $item->{pos}, $item->{strand},
@@ -1106,7 +1120,7 @@ sub do_annotate
 			print $output join("\t", ( "-" ) x 4);
 		}
 
-		print $output "\n";
+		print $output "\t", join("\t", map { $item->{$_} } @nameSet2), "\n";
 	}
 	close $output;
 }
