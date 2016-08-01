@@ -364,7 +364,7 @@ sub parse_opt_collect
 		} elsif ($arg eq '-v') {
 			++$opt{verbose};
 		} elsif ($arg eq '-h' or $arg eq '--help') {
-			print_usage_collect
+			print_usage_collect;
 		} else {
 			err "Unknown option '$arg'!" if $arg =~ /^-/;
 			err "Unexpected parameter '$arg'!" if scalar @args > 2;
@@ -504,7 +504,7 @@ sub parse_opt_identify
 		} elsif ($arg eq '-v') {
 			++$opt{verbose};
 		} elsif ($arg eq '-h' or $arg eq '--help') {
-			print_usage_identify
+			print_usage_identify;
 		} else {
 			err "Unknown option '$arg'!" if $arg =~ /^-/;
 			err "Unexpected parameter '$arg'!" if scalar @args >= 3;
@@ -751,7 +751,7 @@ sub parse_opt_refine
 		} elsif ($arg eq '-v') {
 			++$opt{verbose};
 		} elsif ($arg eq '-h' or $arg eq '--help') {
-			print_usage_refine
+			print_usage_refine;
 		} else {
 			err "Unknown option '$arg'!" if $arg =~ /^-/;
 			err "Unexpected parameter '$arg'!" if scalar @args >= 3;
@@ -909,7 +909,7 @@ sub parse_opt_sort
 		} elsif ($arg eq '-v') {
 			++$opt{verbose};
 		} elsif ($arg eq '-h' or $arg eq '--help') {
-			print_usage_sort
+			print_usage_sort;
 		} else {
 			err "Unknown option '$arg'!" if $arg =~ /^-/;
 			err "Unexpected parameter '$arg'!" if scalar @args >= 2;
@@ -975,7 +975,7 @@ sub parse_opt_annotate
 		if ($arg eq '-v') {
 			++$opt{verbose};
 		} elsif ($arg eq '-h' or $arg eq '--help') {
-			print_usage_annotate
+			print_usage_annotate;
 		} else {
 			err "Unknown option '$arg'!" if $arg =~ /^-/;
 			err "Unexpected parameter '$arg'!" if scalar @args >= 3;
@@ -1136,6 +1136,72 @@ sub do_annotate
 }
 
 #==========================================================#
+# command 'filter'
+
+my $def_opt_filter = {
+	verbose => 0,
+	input   => '',
+	output  => '/dev/stdout'
+};
+
+sub print_usage_filter
+{
+	print "
+Usage: fuseek filter [options] <fusions.txt> [output.txt]
+
+Options:
+   <fusions.txt>   input TAB-sep filter of fusions
+   [output.txt]    output text file of filtered fusions
+   -v              show verbose messages
+   -h / --help     show this help message
+
+";
+	exit 1;
+}
+
+sub parse_opt_filter
+{
+	my %opt = %{$def_opt_filter};  # deep copy
+
+	my @args = ();
+	while (my $arg = shift) {
+		if ($arg eq '-v') {
+			++$opt{verbose};
+		} elsif ($arg eq '-h' or $arg eq '--help') {
+			print_usage_filter;
+		} else {
+			err "Unknown option '$arg'!" if $arg =~ /^-/;
+			err "Unexpected parameter '$arg'!" if scalar @args >= 2;
+			push @args, $arg;
+		}
+	}
+	print_usage_filter if scalar @args < 1;
+	$opt{input} = shift @args;
+	$opt{output} = shift @args if @args;
+
+	return \%opt;
+}
+
+sub do_filter
+{
+	my $opt = parse_opt_filter @_;
+
+	my $fusions = load_tsv $opt->{input};
+
+	open my $output, '>', $opt->{output} or err "Failed to write '$opt->{output}'";
+	print $output join("\t", @{$fusions->{names}}), "\n";
+	for my $item (@{$fusions->{data}}) {
+		next if $item->{gene} eq '-';
+		next if $item->{gene2} eq '-';
+		next if $item->{supports} <= 1;
+		print $output join("\t", map { $item->{$_} } @{$fusions->{names}}), "\n";
+	}
+	close $output;
+
+	return 0;
+}
+
+#==========================================================#
 # command 'run'
 
 my $def_opt_run = {
@@ -1175,7 +1241,7 @@ sub parse_opt_run
 		} elsif ($arg eq '-v') {
 			++$opt{verbose};
 		} elsif ($arg eq '-h' or $arg eq '--help') {
-			print_usage_run
+			print_usage_run;
 		} else {
 			err "Unknown option '$arg'!" if $arg =~ /^-/;
 			err "Unexpected parameter '$arg'!" if scalar @args >= 5;
@@ -1198,6 +1264,7 @@ sub do_run
 
 	my @args = ();
 	push @args, ('-b', $opt->{regions}) if $opt->{regions};
+	push @args, ('-v') x $opt->{verbose} if $opt->{verbose};
 
 	prep_dir $opt->{out_prefix};
 
@@ -1243,6 +1310,14 @@ sub do_run
 		return $ret if $ret;
 	}
 
+	my $file6 = "$opt->{out_prefix}.6-fusions.sorted.annotated.filtered.txt";
+	die unless -e $file5;
+	if (not -e $file6 or -M $file5 < -M $file6) {
+		print STDERR "Generating '$file6'...\n";
+		my $ret = do_filter $file5, $file6;
+		return $ret if $ret;
+	}
+
 	print STDERR "Done.\n";
 	return 0;
 }
@@ -1265,6 +1340,7 @@ my %commands = (
 	refine   => \&do_refine,
 	sort     => \&do_sort,
 	annotate => \&do_annotate,
+	filter   => \&do_filter,
 	run      => \&do_run,
 	version  => sub { print $version, "\n"; }
 );
@@ -1284,6 +1360,7 @@ Commands:
    refine     refine breakpoints of fusions
    sort       sort fusions by genomic coordinates
    annotate   annotate fusions
+   filter     filter fusions
 
 ";
 	exit 1;
