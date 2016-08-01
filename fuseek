@@ -537,26 +537,11 @@ sub get_breakpoint_supports
 	return \%data;
 }
 
-sub add_breakpoint
-{
-	my ($breakpoints_ref, $chrom, $pos, $strand, $chrom2, $pos2, $strand2, $id) = @_;
-
-	my $key = join(':', $chrom, $pos, $strand);
-	my $key2 = join(':', $chrom2, $pos2, $strand2);
-	if (compare_genomic_coord2($key, $key2) <= 0) {
-		($key, $key2) = ($key2, $key);
-	}
-	$breakpoints_ref->{$key}->{$key2}->{$id}++;
-}
-
 sub try_split_and_align
 {
-	my ($genome, $chrom, $pos, $strand, $breakpoint, $seq, $cigar, $chrom2, $pos2, $strand2, $seq2, $cigar2, $id, $opt, $breakpoints_ref) = @_;
+	my ($output, $genome, $chrom, $pos, $strand, $breakpoint, $seq, $cigar, $chrom2, $pos2, $strand2, $cigar2, $id, $opt) = @_;
 
 	print STDERR "=============== try_split_and_align ($chrom:$pos:$strand, $cigar, $breakpoint, $chrom2:$pos2:$strand2)\n" if $opt->{verbose} > 1;
-
-	my $o = check_overlap($seq, $strand, $seq2, $strand2, $opt);
-	$seq = substr($seq, 0, $o) if defined $o;
 
 	my $query;
 	if ($strand eq '+') {
@@ -610,11 +595,17 @@ sub try_split_and_align
 		} else {
 			$breakpoint2 = $target_end - $x;
 		}
-		add_breakpoint $breakpoints_ref, $chrom, $breakpoint, $strand, $chrom2, $breakpoint2, $strand2, $id;
-
 		print STDERR "align at: $x ($chrom2:$breakpoint2:$strand2, target_strand = '$target_strand')\n" if $opt->{verbose} > 1;
+
+		if (compare_genomic_coord($chrom, $breakpoint, $strand, $chrom2, $breakpoint2, $strand2) <= 0) {
+			print $output join("\t", $chrom, $breakpoint, $strand, $chrom2, $breakpoint2, $strand2, $id), "\n";
+		} else {
+			print $output join("\t", $chrom2, $breakpoint2, $strand2, $chrom, $breakpoint, $strand, $id), "\n";
+		}
+		return 1;
 	} else {
 		print STDERR "align failed\n" if $opt->{verbose} > 1;
+		return 0;
 	}
 }
 
@@ -629,16 +620,32 @@ sub load_discordant_reads
 
 sub process_paired_reads
 {
-	my ($discord, $opt, $breakpoints_ref, $candidate_breakpoints_ref, $genome) = @_;
+	my ($output, $discord, $opt, $candidate_breakpoints_ref, $genome) = @_;
 
 	for my $p (@{$discord}) {
-		if ($p->{breakpoint} ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom}}->{$p->{breakpoint}}->{$p->{strand}}) {
-			try_split_and_align $genome, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{breakpoint},
-				$p->{seq}, $p->{cigar}, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{seq2}, $p->{cigar2}, $p->{id}, $opt, $breakpoints_ref;
-		}
-		if ($p->{breakpoint2} ne '-' and exists $candidate_breakpoints_ref->{$p->{chrom2}}->{$p->{breakpoint2}}->{$p->{strand2}}) {
-			try_split_and_align $genome, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{breakpoint2},
-				$p->{seq2}, $p->{cigar2}, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{seq}, $p->{cigar}, $p->{id}, $opt, $breakpoints_ref;
+		next if $p->{breakpoint} eq '-' and $p->{breakpoint2} eq '-';
+
+		my $overlap = check_overlap($p->{seq}, $p->{strand}, $p->{seq2}, $p->{strand2}, $opt);
+		if (defined $overlap) {
+			if ($p->{breakpoint} ne '-') {
+				my $seq = substr($p->{seq}, 0, $overlap);
+				try_split_and_align $output, $genome, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{breakpoint},
+					$seq, $p->{cigar}, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{cigar2}, $p->{id}, $opt;
+			} else {
+				my $seq2 = substr($p->{seq2}, 0, $overlap);
+				try_split_and_align $output, $genome, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{breakpoint2},
+					$seq2, $p->{cigar2}, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{cigar}, $p->{id}, $opt;
+			}
+		} else {
+			if ($p->{breakpoint} ne '-') {
+				my $ok = try_split_and_align $output, $genome, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{breakpoint},
+					$p->{seq}, $p->{cigar}, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{cigar2}, $p->{id}, $opt;
+				next if $ok;
+			}
+			if ($p->{breakpoint2} ne '-') {
+				try_split_and_align $output, $genome, $p->{chrom2}, $p->{pos2}, $p->{strand2}, $p->{breakpoint2},
+					$p->{seq2}, $p->{cigar2}, $p->{chrom}, $p->{pos}, $p->{strand}, $p->{cigar}, $p->{id}, $opt;
+			}
 		}
 	}
 }
@@ -690,18 +697,10 @@ sub do_identify
 	}
 
 	my $genome = load_genome $opt->{genome}, $opt->{verbose};
-	my %breakpoints = ();
-	process_paired_reads $discord, $opt, \%breakpoints, \%candidate_breakpoints, $genome, $opt->{min_clip};
 
 	open my $output, ">", $opt->{output} or err "Failed to write '$opt->{output}'";
 	print $output join("\t", 'chrom', 'pos', 'strand', 'chrom2', 'pos2', 'strand2', 'id'), "\n";
-	for my $key (sort { compare_genomic_coord2($a, $b) } keys %breakpoints) {
-		for my $key2 (sort { compare_genomic_coord2($a, $b) } keys %{$breakpoints{$key}}) {
-			for my $id (sort keys %{$breakpoints{$key}->{$key2}}) {
-				print $output join("\t", split(':', $key), split(':', $key2), $id), "\n";
-			}
-		}
-	}
+	process_paired_reads $output, $discord, $opt, \%candidate_breakpoints, $genome, $opt->{min_clip};
 	close $output;
 
 	return 0;
@@ -932,6 +931,7 @@ sub do_sort
 
 	open my $output, '>', $opt->{output} or err "Failed to write '$opt->{output}'";
 	my $reverse = ($opt->{reverse} ? -1 : 1);
+	print $output join("\t", @{$fusions->{names}}), "\n";
 	for my $item (sort { compare_fusion($a, $b) * $reverse } @{$fusions->{data}}) {
 		print $output join("\t", map { $item->{$_} } @{$fusions->{names}}), "\n";
 	}
