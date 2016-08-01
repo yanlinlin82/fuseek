@@ -29,20 +29,27 @@
 
 对于某个已经完成bwa mapping的BAM文件：
 
-	$ fuseek run hg19.fa refGene.gz in.bam xyz
+	$ fuseek run hg19.fa refGene.gz in.bam foo
 
 将生成如下两个文件：
 
-	xyz.01-discord.txt
-	xyz.02-candidate.txt
+	foo.1-discord.txt
+	foo.2-breakpoints.txt
+	foo.3-fusions.txt
+	foo.4-fusions.sorted.txt
+	foo.5-fusions.sorted.annotated.txt
+	foo.6-fusions.sorted.annotated.filtered.txt
 
 该流程也可以拆分为如下几个步骤分开顺序执行：
 
-	$ fuseek collect in.bam -o xyz.01-discord.txt
-	$ fuseek identify xyz.01-discord.txt hg19.fa -r refGene.gz -o xyz.02-candidate.txt
+	$ fuseek collect in.bam foo.1-discord.txt
+	$ fuseek identify hg19.fa foo.1-discord.txt foo.2-breakpoints.txt
+	$ fuseek refine foo.2-breakpoints.txt in.bam foo.3-fusions.txt
+	$ fuseek sort foo.3-fusions.txt foo.4-fusions.sorted.txt
+	$ fuseek annotate hg19.refGene.gz foo.4-fusions.sorted.txt foo.5-fusions.sorted.annotated.txt
+	$ fuseek filter foo.5-fusions.sorted.annotated.txt foo.6-fusions.sorted.annotated.filtered.txt
 
-
-## 分析思路步骤
+## 分析思路步骤及各子命令简介
 
 1. 'collect' - 从BAM文件中提取双端比对位置不一致的序列。
 
@@ -56,6 +63,10 @@
 
 	这里仅根据所报出的各断点位置，对fusion进行合并；然后回到bam文件中，统计断点处的测序深度，用以估算fusion发生的频率。
 
-4. 'annotate' - 对融合突变进行注释，确定其基因及其外显子等信息。
+4. 'sort' - 按照基因组坐标进行排序
+
+5. 'annotate' - 对融合突变进行注释，确定其基因及其外显子等信息。
 
 	对fusion进行注释，这里可能会同时得到多个转录本信息，于是会将其都列出（用半角分号隔开）。
+
+6. 'filter' - 过滤：要求同时落在基因区，且两端在不同基因，且支持reads数目超过1。
