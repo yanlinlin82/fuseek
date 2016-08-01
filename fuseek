@@ -1218,6 +1218,7 @@ sub do_filter
 	for my $item (@{$fusions->{data}}) {
 		next if $item->{gene} eq '-';
 		next if $item->{gene2} eq '-';
+		next if $item->{gene} eq $item->{gene2};
 		next if $item->{supports} <= 1;
 		print $output join("\t", map { $item->{$_} } @{$fusions->{names}}), "\n";
 	}
