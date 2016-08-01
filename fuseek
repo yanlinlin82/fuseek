@@ -1086,6 +1086,31 @@ sub parse_pos
 	return 'r.' . $text;
 }
 
+sub join_gene
+{
+	my $anno = shift;
+	my $n = scalar @{$anno};
+	if ($n == 0) {
+		return "";
+	} elsif ($n == 1) {
+		return $anno->[0]->{gene};
+	} else {
+		my $gene = $anno->[0]->{gene};
+		my $any_diff = 0;
+		for my $i (1 .. ($n - 1)) {
+			if ($gene ne $anno->[$i]->{gene}) {
+				$any_diff = 1;
+				last;
+			}
+		}
+		if ($any_diff) {
+			return join(";", map { $_->{gene} } @{$anno});
+		} else {
+			return $gene;
+		}
+	}
+}
+
 sub do_annotate
 {
 	my $opt = parse_opt_annotate @_;
@@ -1107,7 +1132,7 @@ sub do_annotate
 		my $anno1 = annotate_breakpoint $genes, $item->{chrom}, $item->{pos}, $item->{strand};
 		if (@{$anno1}) {
 			print $output join("\t",
-				join(";", map { $_->{gene} } @{$anno1}),
+				join_gene($anno1),
 				join(";", map { $_->{transcript} } @{$anno1}),
 				join(";", map { $_->{exon} } @{$anno1}),
 				join(";", map { parse_pos $_, $item->{strand} } @{$anno1}));
@@ -1120,7 +1145,7 @@ sub do_annotate
 		my $anno2 = annotate_breakpoint $genes, $item->{chrom2}, $item->{pos2}, $item->{strand2};
 		if (@{$anno2}) {
 			print $output join("\t",
-				join(";", map { $_->{gene} } @{$anno2}),
+				join_gene($anno2),
 				join(";", map { $_->{transcript} } @{$anno2}),
 				join(";", map { $_->{exon} } @{$anno2}),
 				join(";", map { parse_pos $_, $item->{strand} } @{$anno2}));
