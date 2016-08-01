@@ -449,6 +449,8 @@ sub do_collect
 
 	printf STDERR "\n[" . time_str(time) . '] ' if $opt->{verbose} > 1 and $last_total > 0;
 	print STDERR "All $total alignment(s) scanned, and $count selected.\n" if $opt->{verbose} > 0;
+
+	return 0;
 }
 
 #==========================================================#
@@ -701,6 +703,8 @@ sub do_identify
 		}
 	}
 	close $output;
+
+	return 0;
 }
 
 #==========================================================#
@@ -865,6 +869,8 @@ sub do_refine
 			$count, $depth1, $depth2, $freq1, $freq2, $freq), "\n";
 	}
 	close $output;
+
+	return 0;
 }
 
 #==========================================================#
@@ -930,6 +936,8 @@ sub do_sort
 		print $output join("\t", map { $item->{$_} } @{$fusions->{names}}), "\n";
 	}
 	close $output;
+
+	return 0;
 }
 
 #==========================================================#
@@ -1123,6 +1131,8 @@ sub do_annotate
 		print $output "\t", join("\t", map { $item->{$_} } @nameSet2), "\n";
 	}
 	close $output;
+
+	return 0;
 }
 
 #==========================================================#
@@ -1188,17 +1198,20 @@ sub do_run
 	die unless -e $file0;
 	if (not -e $file1 or -M $file0 < -M $file1) {
 		print STDERR "Generating '$file1'...\n";
-		do_collect $file0, $file1;
+		my $ret = do_collect $file0, $file1;
+		return $ret if $ret;
 	}
 
 	my $file2 = "$opt->{out_prefix}.2-breakpoints.txt";
 	die unless -e $file1;
 	if (not -e $file2 or -M $file1 < -M $file2) {
 		print STDERR "Generating '$file2'...\n";
-		do_identify $opt->{genome}, $file1, $file2;
+		my $ret = do_identify $opt->{genome}, $file1, $file2;
+		return $ret if $ret;
 	}
 
 	print STDERR "Done.\n";
+	return 0;
 }
 
 #==========================================================#
