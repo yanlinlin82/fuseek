@@ -1204,7 +1204,14 @@ sub do_run
 #==========================================================#
 # main procedure
 
-my $version = "0.0.1";
+my $git_hash = '$Id$';
+my $version_suffix = "";
+if ($git_hash =~ /Id: (.*) /) {
+	$version_suffix = ' (' . substr($1, 0, 7) . ')';
+}
+my $version = "0.0.1$version_suffix";
+
+#----------------------------------------------------------#
 
 my %commands = (
 	collect  => \&do_collect,
