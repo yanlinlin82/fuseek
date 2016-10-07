@@ -827,7 +827,7 @@ sub do_refine
 		my ($chrom, $pos, $strand, $chrom2, $pos2, $strand2) = split(':', $key);
 		my $count = $supports{$key};
 
-		my $depth1 = 0;
+		my $depth1;
 		for my $i (0, 1, -1, 2, -2, 3, -3) {
 			if (exists $pos_list{$chrom}->{$pos + $i}) {
 				$depth1 = $pos_list{$chrom}->{$pos + $i};
@@ -835,9 +835,9 @@ sub do_refine
 			}
 		}
 
-		my $depth2 = 0;
+		my $depth2 = $pos_list{$chrom2}->{$pos2};
 		for my $i (0, 1, -1, 2, -2, 3, -3) {
-			if (exists $pos_list{$chrom2}->{$pos2 + $i}) {
+			if (exists $pos_list{$chrom2}->{$pos + $i}) {
 				$depth2 = $pos_list{$chrom2}->{$pos2 + $i};
 				last;
 			}
